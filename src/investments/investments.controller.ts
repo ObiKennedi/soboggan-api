@@ -3,11 +3,31 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { InvestmentsService } from './investments.service';
 import { CreateSellInstructionDto } from './dto/create-sell-instruction.dto';
+import { CreateBuyInstructionDto } from './dto/create-buy-instruction.dto';
 
 @Controller('investments')
 @UseGuards(JwtAuthGuard)
 export class InvestmentsController {
   constructor(private investmentsService: InvestmentsService) {}
+
+  @Get('stocks')
+  getAvailableStocks() {
+    return this.investmentsService.getAvailableStocks();
+  }
+
+  @Post('buy-instructions')
+  createBuyInstruction(
+    @CurrentUser('userId') userId: string,
+    @Body() dto: CreateBuyInstructionDto,
+    @Req() req: any,
+  ) {
+    return this.investmentsService.createBuyInstruction(userId, dto, req.ip);
+  }
+
+  @Get('buy-instructions')
+  listBuyInstructions(@CurrentUser('userId') userId: string) {
+    return this.investmentsService.listBuyInstructions(userId);
+  }
 
   @Post('sell-instructions')
   createSellInstruction(

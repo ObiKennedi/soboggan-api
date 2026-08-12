@@ -14,7 +14,8 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AdminService } from './admin.service';
 import { UpdateUserAdminDto } from './dto/update-user-admin.dto';
 import { UpdateSellInstructionAdminDto } from './dto/update-sell-instruction-admin.dto';
-import { Role, KycStatus, SellInstructionStatus } from '@prisma/client';
+import { UpdateBuyInstructionAdminDto } from './dto/update-buy-instruction-admin.dto';
+import { Role, KycStatus, SellInstructionStatus, BuyInstructionStatus } from '@prisma/client';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -57,6 +58,20 @@ export class AdminController {
     @CurrentUser('userId') adminUserId: string,
   ) {
     return this.adminService.updateUser(id, dto, adminUserId);
+  }
+
+  @Get('buy-instructions')
+  listBuyInstructions(@Query('status') status?: BuyInstructionStatus) {
+    return this.adminService.listBuyInstructions(status);
+  }
+
+  @Patch('buy-instructions/:id')
+  updateBuyInstruction(
+    @Param('id') id: string,
+    @Body() dto: UpdateBuyInstructionAdminDto,
+    @CurrentUser('userId') adminUserId: string,
+  ) {
+    return this.adminService.updateBuyInstruction(id, dto, adminUserId);
   }
 
   @Get('sell-instructions')

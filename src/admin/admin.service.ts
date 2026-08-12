@@ -3,7 +3,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { UpdateUserAdminDto } from './dto/update-user-admin.dto';
 import { UpdateSellInstructionAdminDto } from './dto/update-sell-instruction-admin.dto';
-import { Prisma, Role, KycStatus, SellInstructionStatus } from '@prisma/client';
+import { UpdateBuyInstructionAdminDto } from './dto/update-buy-instruction-admin.dto';
+import { Prisma, Role, KycStatus, SellInstructionStatus, BuyInstructionStatus } from '@prisma/client';
 
 @Injectable()
 export class AdminService {
@@ -18,6 +19,9 @@ export class AdminService {
       where: { kycStatus: { in: ['PENDING', 'IN_REVIEW'] } },
     });
     const pendingSellRequests = await this.prisma.sellInstruction.count({
+      where: { status: { in: ['PENDING', 'IN_REVIEW'] } },
+    });
+    const pendingBuyRequests = await this.prisma.buyInstruction.count({
       where: { status: { in: ['PENDING', 'IN_REVIEW'] } },
     });
     const totalAccounts = await this.prisma.account.count();
@@ -37,6 +41,7 @@ export class AdminService {
       totalUsers,
       pendingKycUsers,
       pendingSellRequests,
+      pendingBuyRequests,
       totalAccounts,
       totalTransactions,
       totalBalanceAum,
@@ -127,6 +132,63 @@ export class AdminService {
       entityType: 'User',
       entityId: userId,
       metadata: { changes: { ...dto }, targetEmail: user.email } as any,
+    });
+
+    return updated;
+  }
+
+  async listBuyInstructions(status?: BuyInstructionStatus) {
+    const where: Prisma.BuyInstructionWhereInput = {};
+    if (status) where.status = status;
+
+    return this.prisma.buyInstruction.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+          },
+        },
+      },
+    });
+  }
+
+  async updateBuyInstruction(
+    id: string,
+    dto: UpdateBuyInstructionAdminDto,
+    adminUserId: string,
+  ) {
+    const instruction = await this.prisma.buyInstruction.findUnique({
+      where: { id },
+      include: { user: true },
+    });
+
+    if (!instruction) throw new NotFoundException('Buy instruction not found');
+
+    const updated = await this.prisma.buyInstruction.update({
+      where: { id },
+      data: {
+        status: dto.status,
+        ...(dto.adminNotes !== undefined && { adminNotes: dto.adminNotes }),
+      },
+    });
+
+    await this.activityLogService.log({
+      userId: adminUserId,
+      action: 'ADMIN_UPDATE_BUY_INSTRUCTION',
+      entityType: 'BuyInstruction',
+      entityId: id,
+      metadata: {
+        stockSymbol: instruction.stockSymbol,
+        newStatus: dto.status,
+        clientEmail: instruction.user.email,
+        adminNotes: dto.adminNotes,
+      },
     });
 
     return updated;
