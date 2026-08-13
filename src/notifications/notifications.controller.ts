@@ -37,6 +37,16 @@ export class NotificationsController {
     return this.notificationsService.markAllAsRead(userId);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Patch('push-token')
+  savePushToken(
+    @CurrentUser('userId') userId: string,
+    @Body('pushToken') pushToken: string,
+    @Body('platform') platform?: string,
+  ) {
+    return this.notificationsService.savePushToken(userId, pushToken, platform);
+  }
+
   /**
    * Pusher private-channel auth endpoint. The RN Pusher client calls this
    * automatically (via authEndpoint config) before subscribing to

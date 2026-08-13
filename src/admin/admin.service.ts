@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { PortfolioExecutionService } from './portfolio-execution.service';
 import { UpdateUserAdminDto } from './dto/update-user-admin.dto';
 import { UpdateSellInstructionAdminDto } from './dto/update-sell-instruction-admin.dto';
 import { UpdateBuyInstructionAdminDto } from './dto/update-buy-instruction-admin.dto';
@@ -11,6 +12,7 @@ export class AdminService {
   constructor(
     private prisma: PrismaService,
     private activityLogService: ActivityLogService,
+    private portfolioExecutionService: PortfolioExecutionService,
   ) {}
 
   async getStats() {
@@ -154,9 +156,11 @@ export class AdminService {
             phone: true,
           },
         },
+        listing: true,
       },
     });
   }
+
 
   async updateBuyInstruction(
     id: string,
@@ -165,10 +169,11 @@ export class AdminService {
   ) {
     const instruction = await this.prisma.buyInstruction.findUnique({
       where: { id },
-      include: { user: true },
+      include: { user: true, listing: true },
     });
 
     if (!instruction) throw new NotFoundException('Buy instruction not found');
+    const wasAlreadyExecuted = instruction.status === 'EXECUTED';
 
     const updated = await this.prisma.buyInstruction.update({
       where: { id },
@@ -176,6 +181,7 @@ export class AdminService {
         status: dto.status,
         ...(dto.adminNotes !== undefined && { adminNotes: dto.adminNotes }),
       },
+      include: { user: true, listing: true },
     });
 
     await this.activityLogService.log({
@@ -190,6 +196,14 @@ export class AdminService {
         adminNotes: dto.adminNotes,
       },
     });
+
+    // Trigger portfolio execution on first EXECUTED transition
+    if (dto.status === 'EXECUTED' && !wasAlreadyExecuted) {
+      // Fire-and-forget; errors are logged inside the service
+      this.portfolioExecutionService.executePortfolioPurchase(updated as any).catch((err) => {
+        console.error('Portfolio execution failed for instruction', id, err);
+      });
+    }
 
     return updated;
   }

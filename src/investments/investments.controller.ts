@@ -4,15 +4,32 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { InvestmentsService } from './investments.service';
 import { CreateSellInstructionDto } from './dto/create-sell-instruction.dto';
 import { CreateBuyInstructionDto } from './dto/create-buy-instruction.dto';
+import { RealEstateService } from '../real-estate/real-estate.service';
 
 @Controller('investments')
 @UseGuards(JwtAuthGuard)
 export class InvestmentsController {
-  constructor(private investmentsService: InvestmentsService) {}
+  constructor(
+    private investmentsService: InvestmentsService,
+    private realEstateService: RealEstateService,
+  ) {}
 
+  /** NGX stocks list */
   @Get('stocks')
   getAvailableStocks() {
     return this.investmentsService.getAvailableStocks();
+  }
+
+  /** Live crypto prices from Coinbase */
+  @Get('crypto')
+  getAvailableCrypto() {
+    return this.investmentsService.getAvailableCrypto();
+  }
+
+  /** Real estate listings (proxied from RealEstateService) */
+  @Get('real-estate')
+  getRealEstateListings() {
+    return this.realEstateService.listActiveListings();
   }
 
   @Post('buy-instructions')

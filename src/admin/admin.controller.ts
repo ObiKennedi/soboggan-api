@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Patch,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -15,13 +16,19 @@ import { AdminService } from './admin.service';
 import { UpdateUserAdminDto } from './dto/update-user-admin.dto';
 import { UpdateSellInstructionAdminDto } from './dto/update-sell-instruction-admin.dto';
 import { UpdateBuyInstructionAdminDto } from './dto/update-buy-instruction-admin.dto';
-import { Role, KycStatus, SellInstructionStatus, BuyInstructionStatus } from '@prisma/client';
+import { Role, KycStatus, SellInstructionStatus, BuyInstructionStatus, RealEstateListingStatus } from '@prisma/client';
+import { RealEstateService } from '../real-estate/real-estate.service';
+import { CreateRealEstateListingDto } from '../real-estate/dto/create-listing.dto';
+import { UpdateRealEstateListingDto } from '../real-estate/dto/update-listing.dto';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('ADMIN', 'ADVISOR')
 export class AdminController {
-  constructor(private adminService: AdminService) {}
+  constructor(
+    private adminService: AdminService,
+    private realEstateService: RealEstateService,
+  ) {}
 
   @Get('stats')
   getStats() {
@@ -112,5 +119,27 @@ export class AdminController {
       skip ? parseInt(skip, 10) : 0,
       take ? parseInt(take, 10) : 100,
     );
+  }
+
+  // ─── Real Estate Listings ───────────────────────────────────────────────
+
+  @Get('real-estate/listings')
+  listRealEstateListings(@Query('status') status?: RealEstateListingStatus) {
+    return this.realEstateService.listAllListings(status);
+  }
+
+  @Post('real-estate/listings')
+  @Roles('ADMIN')
+  createRealEstateListing(@Body() dto: CreateRealEstateListingDto) {
+    return this.realEstateService.createListing(dto);
+  }
+
+  @Patch('real-estate/listings/:id')
+  @Roles('ADMIN')
+  updateRealEstateListing(
+    @Param('id') id: string,
+    @Body() dto: UpdateRealEstateListingDto,
+  ) {
+    return this.realEstateService.updateListing(id, dto);
   }
 }

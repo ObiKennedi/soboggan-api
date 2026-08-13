@@ -4,6 +4,8 @@ import { ActivityLogService } from '../activity-log/activity-log.service';
 import { CreateSellInstructionDto } from './dto/create-sell-instruction.dto';
 import { CreateBuyInstructionDto } from './dto/create-buy-instruction.dto';
 
+// ─── Fallback NGX Stock Data ────────────────────────────────────────────────
+
 const FALLBACK_STOCKS = [
   { symbol: 'DANGCEM', name: 'Dangote Cement Plc', price: 650.00, change: 11.50, changePercent: '+1.80%', currency: 'NGN', volume: '1.2M' },
   { symbol: 'MTNN', name: 'MTN Nigeria Communications Plc', price: 220.50, change: 5.20, changePercent: '+2.41%', currency: 'NGN', volume: '3.4M' },
@@ -19,6 +21,39 @@ const FALLBACK_STOCKS = [
   { symbol: 'OANDO', name: 'Oando Plc', price: 75.00, change: 4.00, changePercent: '+5.63%', currency: 'NGN', volume: '6.7M' },
 ];
 
+// ─── Curated Crypto List ─────────────────────────────────────────────────────
+
+const CRYPTO_COINS = [
+  { symbol: 'BTC', name: 'Bitcoin', pair: 'BTC-USD' },
+  { symbol: 'ETH', name: 'Ethereum', pair: 'ETH-USD' },
+  { symbol: 'SOL', name: 'Solana', pair: 'SOL-USD' },
+  { symbol: 'BNB', name: 'BNB', pair: 'BNB-USD' },
+  { symbol: 'XRP', name: 'XRP', pair: 'XRP-USD' },
+  { symbol: 'ADA', name: 'Cardano', pair: 'ADA-USD' },
+  { symbol: 'AVAX', name: 'Avalanche', pair: 'AVAX-USD' },
+  { symbol: 'DOGE', name: 'Dogecoin', pair: 'DOGE-USD' },
+  { symbol: 'DOT', name: 'Polkadot', pair: 'DOT-USD' },
+  { symbol: 'MATIC', name: 'Polygon', pair: 'MATIC-USD' },
+  { symbol: 'LINK', name: 'Chainlink', pair: 'LINK-USD' },
+  { symbol: 'LTC', name: 'Litecoin', pair: 'LTC-USD' },
+  { symbol: 'UNI', name: 'Uniswap', pair: 'UNI-USD' },
+  { symbol: 'SHIB', name: 'Shiba Inu', pair: 'SHIB-USD' },
+  { symbol: 'ATOM', name: 'Cosmos', pair: 'ATOM-USD' },
+];
+
+// Fallback prices in case Coinbase is unreachable
+const CRYPTO_FALLBACK: Record<string, number> = {
+  BTC: 105000, ETH: 3800, SOL: 190, BNB: 700, XRP: 0.65,
+  ADA: 0.48, AVAX: 38, DOGE: 0.16, DOT: 7.8, MATIC: 0.55,
+  LINK: 20, LTC: 95, UNI: 10, SHIB: 0.000025, ATOM: 9.5,
+};
+
+// ─── Cache for Coinbase prices ───────────────────────────────────────────────
+
+interface CachedPrice { price: number; fetchedAt: number }
+const cryptoPriceCache = new Map<string, CachedPrice>();
+const CACHE_TTL_MS = 60_000; // 60 seconds
+
 @Injectable()
 export class InvestmentsService {
   constructor(
@@ -26,11 +61,12 @@ export class InvestmentsService {
     private activityLogService: ActivityLogService,
   ) {}
 
+  // ─── Stocks ─────────────────────────────────────────────────────────────
+
   async getAvailableStocks() {
     try {
       const apiKey = process.env.NGNMARKET_API_KEY;
       const apiUrl = process.env.NGNMARKET_API_URL || 'https://api.ngnmarket.com/v1/stocks';
-      
       if (apiKey) {
         const response = await fetch(apiUrl, {
           headers: { 'X-API-KEY': apiKey, 'Accept': 'application/json' },
@@ -42,10 +78,60 @@ export class InvestmentsService {
         }
       }
     } catch {
-      // Graceful fallback to rich NGX dataset
+      // Graceful fallback
     }
     return FALLBACK_STOCKS;
   }
+
+  // ─── Crypto ──────────────────────────────────────────────────────────────
+
+  /** Fetch a single coin price from Coinbase (with in-memory cache) */
+  private async getCoinbasePrice(pair: string): Promise<number | null> {
+    const cached = cryptoPriceCache.get(pair);
+    if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+      return cached.price;
+    }
+    try {
+      const res = await fetch(`https://api.coinbase.com/v2/prices/${pair}/spot`, {
+        headers: { 'Accept': 'application/json' },
+      });
+      if (!res.ok) return null;
+      const body = await res.json();
+      const price = parseFloat(body?.data?.amount);
+      if (!isNaN(price) && price > 0) {
+        cryptoPriceCache.set(pair, { price, fetchedAt: Date.now() });
+        return price;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  /** Returns the full crypto list with live USD prices from Coinbase */
+  async getAvailableCrypto() {
+    const usdToNgn = parseFloat(process.env.USD_TO_NGN_RATE ?? '1600');
+
+    const results = await Promise.all(
+      CRYPTO_COINS.map(async (coin) => {
+        const livePrice = await this.getCoinbasePrice(coin.pair);
+        const priceUSD = livePrice ?? CRYPTO_FALLBACK[coin.symbol] ?? 0;
+        const priceNGN = priceUSD * usdToNgn;
+        return {
+          symbol: coin.symbol,
+          name: coin.name,
+          pair: coin.pair,
+          priceUSD,
+          priceNGN,
+          currency: 'USD',
+          isLive: livePrice !== null,
+        };
+      }),
+    );
+    return results;
+  }
+
+  // ─── Buy Instructions ────────────────────────────────────────────────────
 
   async createBuyInstruction(userId: string, dto: CreateBuyInstructionDto, ip?: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
@@ -56,6 +142,7 @@ export class InvestmentsService {
     const instruction = await this.prisma.buyInstruction.create({
       data: {
         userId,
+        assetCategory: dto.assetCategory,
         stockSymbol: dto.stockSymbol.toUpperCase(),
         stockName: dto.stockName,
         unitPrice: dto.unitPrice,
@@ -63,6 +150,7 @@ export class InvestmentsService {
         totalCost,
         notes: dto.notes ?? null,
         status: 'PENDING',
+        listingId: dto.listingId ?? null,
       },
     });
 
@@ -73,6 +161,7 @@ export class InvestmentsService {
       entityId: instruction.id,
       ipAddress: ip,
       metadata: {
+        assetCategory: dto.assetCategory,
         stockSymbol: dto.stockSymbol,
         quantity: dto.quantity,
         unitPrice: dto.unitPrice,
@@ -87,8 +176,11 @@ export class InvestmentsService {
     return this.prisma.buyInstruction.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
+      include: { listing: true },
     });
   }
+
+  // ─── Sell Instructions ───────────────────────────────────────────────────
 
   async createSellInstruction(userId: string, dto: CreateSellInstructionDto, ip?: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
@@ -129,44 +221,80 @@ export class InvestmentsService {
     });
   }
 
+  // ─── Portfolio Overview (live-valued) ────────────────────────────────────
+
   async getOverview(userId: string) {
-    // Get user's investment accounts & holdings
+    const usdToNgn = parseFloat(process.env.USD_TO_NGN_RATE ?? '1600');
+
     const accounts = await this.prisma.account.findMany({
       where: { userId, type: 'INVESTMENT' },
       include: {
         portfolio: {
           include: {
-            holdings: {
-              include: { asset: true },
-            },
+            holdings: { include: { asset: true } },
           },
         },
       },
     });
+
+    // Build a map of executed buy instructions so we know which are crypto/real-estate
+    const executedBuys = await this.prisma.buyInstruction.findMany({
+      where: { userId, status: 'EXECUTED' },
+      include: { listing: true },
+    });
+    const buyBySymbol = new Map<string, typeof executedBuys[0]>();
+    for (const b of executedBuys) {
+      buyBySymbol.set(b.stockSymbol.toUpperCase(), b);
+    }
 
     let totalValue = 0;
     let totalHoldingsCount = 0;
     const holdingsList: any[] = [];
 
     for (const acc of accounts) {
-      if (acc.portfolio) {
-        for (const h of acc.portfolio.holdings) {
-          const val = Number(h.quantity) * Number(h.asset.currentPrice);
-          const pnl = (Number(h.asset.currentPrice) - Number(h.averageCost)) * Number(h.quantity);
-          totalValue += val;
-          totalHoldingsCount++;
-          holdingsList.push({
-            id: h.id,
-            symbol: h.asset.symbol,
-            name: h.asset.name,
-            assetType: h.asset.type,
-            quantity: Number(h.quantity),
-            averageCost: Number(h.averageCost),
-            currentPrice: Number(h.asset.currentPrice),
-            marketValue: val,
-            unrealizedPnL: pnl,
-          });
+      if (!acc.portfolio) continue;
+      for (const h of acc.portfolio.holdings) {
+        const symbol = h.asset.symbol.toUpperCase();
+        const matchedBuy = buyBySymbol.get(symbol);
+        const assetCategory = matchedBuy?.assetCategory ?? 'STOCK';
+
+        let currentPrice = Number(h.asset.currentPrice);
+        let priceUSD: number | undefined;
+        let isLivePrice = false;
+
+        if (assetCategory === 'CRYPTO') {
+          // Find Coinbase pair
+          const coin = CRYPTO_COINS.find((c) => c.symbol === symbol);
+          const pair = coin?.pair ?? `${symbol}-USD`;
+          const liveUSD = await this.getCoinbasePrice(pair);
+          priceUSD = liveUSD ?? CRYPTO_FALLBACK[symbol] ?? currentPrice;
+          currentPrice = priceUSD * usdToNgn;
+          isLivePrice = liveUSD !== null;
+        } else if (assetCategory === 'REAL_ESTATE' && matchedBuy?.listing) {
+          currentPrice = Number(matchedBuy.listing.pricePerUnit);
         }
+
+        const qty = Number(h.quantity);
+        const val = qty * currentPrice;
+        const pnl = (currentPrice - Number(h.averageCost)) * qty;
+
+        totalValue += val;
+        totalHoldingsCount++;
+        holdingsList.push({
+          id: h.id,
+          symbol: h.asset.symbol,
+          name: h.asset.name,
+          assetType: h.asset.type,
+          assetCategory,
+          quantity: qty,
+          averageCost: Number(h.averageCost),
+          currentPrice,
+          priceUSD: priceUSD ?? null,
+          isLivePrice,
+          marketValue: val,
+          unrealizedPnL: pnl,
+          listingId: matchedBuy?.listingId ?? null,
+        });
       }
     }
 
@@ -182,8 +310,9 @@ export class InvestmentsService {
     };
   }
 
+  // ─── Investment Logs ─────────────────────────────────────────────────────
+
   async getInvestmentLogs(userId: string) {
-    // 1. Get investment-related transactions (BUY, SELL, DIVIDEND, INTEREST)
     const userAccounts = await this.prisma.account.findMany({
       where: { userId },
       select: { id: true },
@@ -199,14 +328,19 @@ export class InvestmentsService {
       take: 20,
     });
 
-    // 2. Get user sell instructions
     const sellInstructions = await this.prisma.sellInstruction.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
       take: 20,
     });
 
-    // Map into unified log items sorted by timestamp
+    const buyInstructions = await this.prisma.buyInstruction.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: { listing: true },
+    });
+
     const logs: any[] = [];
 
     for (const tx of transactions) {
@@ -242,35 +376,33 @@ export class InvestmentsService {
       });
     }
 
-    const buyInstructions = await this.prisma.buyInstruction.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-    });
-
     for (const inst of buyInstructions) {
+      const categoryLabel =
+        inst.assetCategory === 'CRYPTO' ? '🪙 Crypto' :
+        inst.assetCategory === 'REAL_ESTATE' ? '🏠 Real Estate' : '📈 Stock';
+
       logs.push({
         id: `buy-${inst.id}`,
         type: 'BUY_INSTRUCTION',
-        title: `Buy Instruction: ${inst.quantity} units of ${inst.stockSymbol}`,
-        description: inst.notes || `Instruction to Admin to purchase ${inst.stockName} @ ₦${Number(inst.unitPrice).toLocaleString()}`,
+        title: `${categoryLabel} Buy: ${inst.quantity} × ${inst.stockSymbol}`,
+        description: inst.notes || `Instruction to Admin to purchase ${inst.stockName}`,
         amount: Number(inst.totalCost),
         currency: 'NGN',
         timestamp: inst.createdAt,
         status: inst.status,
         meta: {
+          assetCategory: inst.assetCategory,
           stockSymbol: inst.stockSymbol,
           stockName: inst.stockName,
-          quantity: inst.quantity,
+          quantity: Number(inst.quantity),
           unitPrice: Number(inst.unitPrice),
           adminNotes: inst.adminNotes,
+          listingId: inst.listingId,
         },
       });
     }
 
-    // Sort descending by timestamp
     logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
     return logs;
   }
 }

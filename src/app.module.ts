@@ -19,6 +19,7 @@ import { LoansModule } from './loans/loans.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { InvestmentsModule } from './investments/investments.module';
 import { AdminModule } from './admin/admin.module';
+import { RealEstateModule } from './real-estate/real-estate.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { AdminModule } from './admin/admin.module';
     PortfolioModule,
     InvestmentsModule,
     AdminModule,
+    RealEstateModule,
     TransactionsModule,
     PaymentsModule,
     LoansModule,
