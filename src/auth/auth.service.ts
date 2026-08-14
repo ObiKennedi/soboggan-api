@@ -34,23 +34,84 @@ export class AuthService {
   }
 
   async register(dto: RegisterDto, ip?: string) {
+    const email = dto.email.trim().toLowerCase();
+    const phone = dto.phone?.trim() ? dto.phone.trim() : null;
+
     const existing = await this.prisma.user.findUnique({
-      where: { email: dto.email.toLowerCase() },
+      where: { email },
     });
 
     if (existing) {
-      throw new ConflictException('An account with this email address already exists');
+      if (existing.googleId && !existing.passwordHash) {
+        // User originally registered via Google Sign-In and is now setting a password
+        const passwordHash = await bcrypt.hash(dto.password, 10);
+        const updatedUser = await this.prisma.user.update({
+          where: { id: existing.id },
+          data: {
+            passwordHash,
+            firstName: dto.firstName.trim() || existing.firstName,
+            lastName: dto.lastName.trim() || existing.lastName,
+            ...(phone && !existing.phone ? { phone } : {}),
+          },
+        });
+
+        // Ensure user has a savings account
+        const existingAccount = await this.prisma.account.findFirst({
+          where: { userId: updatedUser.id },
+        });
+        if (!existingAccount) {
+          await this.prisma.account.create({
+            data: {
+              userId: updatedUser.id,
+              type: AccountType.SAVINGS,
+              currency: 'NGN',
+              accountNumber: await this.generateAccountNumber(),
+            },
+          });
+        }
+
+        const accessToken = this.jwtService.sign({
+          sub: updatedUser.id,
+          email: updatedUser.email,
+          role: updatedUser.role,
+        });
+
+        await this.activityLogService.log({
+          userId: updatedUser.id,
+          action: 'REGISTER_PASSWORD',
+          entityType: 'User',
+          entityId: updatedUser.id,
+          ipAddress: ip,
+          metadata: { method: 'credentials' },
+        });
+
+        return {
+          accessToken,
+          user: updatedUser,
+          message: 'Password created successfully! You can now sign in with both Google and your password.',
+        };
+      }
+      throw new ConflictException('An account with this email address already exists. Please sign in.');
+    }
+
+    if (phone) {
+      const existingPhone = await this.prisma.user.findUnique({
+        where: { phone },
+      });
+      if (existingPhone) {
+        throw new ConflictException('An account with this phone number already exists.');
+      }
     }
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
 
     const user = await this.prisma.user.create({
       data: {
-        email: dto.email.toLowerCase(),
+        email,
         passwordHash,
-        firstName: dto.firstName,
-        lastName: dto.lastName,
-        phone: dto.phone ?? null,
+        firstName: dto.firstName.trim(),
+        lastName: dto.lastName.trim(),
+        phone,
         emailVerified: false,
         lastLoginAt: new Date(),
       },
@@ -201,8 +262,9 @@ export class AuthService {
 
 
   async login(dto: LoginDto, ip?: string) {
+    const email = dto.email.trim().toLowerCase();
     const user = await this.prisma.user.findUnique({
-      where: { email: dto.email.toLowerCase() },
+      where: { email },
     });
 
     if (!user) {
@@ -211,7 +273,7 @@ export class AuthService {
 
     if (!user.passwordHash) {
       throw new UnauthorizedException(
-        'This email is associated with Google Sign-In. Please tap "Continue with Google".',
+        'This email is registered with Google Sign-In. Please tap "Continue with Google" or register to set a password.',
       );
     }
 
@@ -260,7 +322,7 @@ export class AuthService {
 
     const profile: GoogleProfilePayload = {
       googleId: payload.sub,
-      email: payload.email,
+      email: payload.email.trim().toLowerCase(),
       firstName: payload.given_name ?? 'User',
       lastName: payload.family_name ?? '',
       avatarUrl: payload.picture,
@@ -273,19 +335,23 @@ export class AuthService {
    * For the web OAuth redirect flow (e.g. an admin/advisor dashboard).
    */
   async loginWithGoogleProfile(profile: GoogleProfilePayload, ip?: string) {
-    return this.issueSessionForGoogleProfile(profile, ip);
+    return this.issueSessionForGoogleProfile({
+      ...profile,
+      email: profile.email.trim().toLowerCase(),
+    }, ip);
   }
 
   private async issueSessionForGoogleProfile(profile: GoogleProfilePayload, ip?: string) {
+    const email = profile.email.trim().toLowerCase();
     const user = await this.prisma.user.upsert({
-      where: { email: profile.email },
+      where: { email },
       update: {
         googleId: profile.googleId,
         avatarUrl: profile.avatarUrl,
         lastLoginAt: new Date(),
       },
       create: {
-        email: profile.email,
+        email,
         googleId: profile.googleId,
         firstName: profile.firstName,
         lastName: profile.lastName,
@@ -294,6 +360,21 @@ export class AuthService {
         lastLoginAt: new Date(),
       },
     });
+
+    // Automatically provision a primary Savings Account if user doesn't have one yet
+    const existingAccount = await this.prisma.account.findFirst({
+      where: { userId: user.id },
+    });
+    if (!existingAccount) {
+      await this.prisma.account.create({
+        data: {
+          userId: user.id,
+          type: AccountType.SAVINGS,
+          currency: 'NGN',
+          accountNumber: await this.generateAccountNumber(),
+        },
+      });
+    }
 
     const accessToken = this.jwtService.sign({
       sub: user.id,
