@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { NotificationType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PusherService } from '../common/pusher/pusher.service';
-import { Expo, ExpoPushMessage } from 'expo-server-sdk';
+import axios from 'axios';
 
 export interface CreateNotificationInput {
   userId: string;
@@ -12,10 +12,27 @@ export interface CreateNotificationInput {
   metadata?: Prisma.InputJsonValue;
 }
 
+export interface ExpoPushMessage {
+  to: string | string[];
+  sound?: 'default' | null;
+  title?: string;
+  body?: string;
+  data?: any;
+  badge?: number;
+  channelId?: string;
+}
+
+export function isExpoPushToken(token: unknown): boolean {
+  return (
+    typeof token === 'string' &&
+    (((token.startsWith('ExponentPushToken[') || token.startsWith('ExpoPushToken[')) && token.endsWith(']')) ||
+      /^[a-z\d]{8}-[a-z\d]{4}-[a-z\d]{4}-[a-z\d]{4}-[a-z\d]{12}$/i.test(token))
+  );
+}
+
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
-  private expo = new Expo();
 
   constructor(
     private prisma: PrismaService,
@@ -39,7 +56,7 @@ export class NotificationsService {
   }
 
   async savePushToken(userId: string, pushToken: string, platform?: string) {
-    if (!Expo.isExpoPushToken(pushToken)) {
+    if (!isExpoPushToken(pushToken)) {
       this.logger.warn(`Invalid Expo push token format: ${pushToken}`);
     }
 
@@ -64,6 +81,14 @@ export class NotificationsService {
     });
   }
 
+  private chunkPushNotifications(messages: ExpoPushMessage[], chunkSize = 100): ExpoPushMessage[][] {
+    const chunks: ExpoPushMessage[][] = [];
+    for (let i = 0; i < messages.length; i += chunkSize) {
+      chunks.push(messages.slice(i, i + chunkSize));
+    }
+    return chunks;
+  }
+
   private async sendExpoPush(
     userId: string,
     title: string,
@@ -77,7 +102,7 @@ export class NotificationsService {
 
     const pushTokens = devices
       .map((d) => d.pushToken)
-      .filter((t): t is string => !!t && Expo.isExpoPushToken(t));
+      .filter((t): t is string => !!t && isExpoPushToken(t));
 
     if (pushTokens.length === 0) return;
 
@@ -89,12 +114,18 @@ export class NotificationsService {
       data: data || {},
     }));
 
-    const chunks = this.expo.chunkPushNotifications(messages);
+    const chunks = this.chunkPushNotifications(messages);
     for (const chunk of chunks) {
       try {
-        await this.expo.sendPushNotificationsAsync(chunk);
-      } catch (error) {
-        this.logger.error('Error sending Expo push chunk:', error);
+        await axios.post('https://exp.host/--/api/v2/push/send', chunk, {
+          headers: {
+            'Accept': 'application/json',
+            'Accept-Encoding': 'gzip, deflate',
+            'Content-Type': 'application/json',
+          },
+        });
+      } catch (error: any) {
+        this.logger.error('Error sending Expo push chunk:', error?.response?.data || error?.message || error);
       }
     }
   }
