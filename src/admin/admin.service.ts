@@ -241,6 +241,13 @@ export class AdminService {
 
     if (!instruction) throw new NotFoundException('Sell instruction not found');
 
+    const wasAlreadyExecuted = instruction.status === 'EXECUTED';
+
+    // If transitioning to EXECUTED, validate ownership & credit client balance
+    if (dto.status === 'EXECUTED' && !wasAlreadyExecuted) {
+      await this.portfolioExecutionService.executePortfolioSale(instruction as any);
+    }
+
     const updated = await this.prisma.sellInstruction.update({
       where: { id },
       data: {
