@@ -12,4 +12,8 @@ export class CreateTransactionDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @IsOptional()
+  metadata?: any;
 }
+

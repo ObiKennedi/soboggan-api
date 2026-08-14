@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -232,6 +232,43 @@ export class InvestmentsService {
   async createSellInstruction(userId: string, dto: CreateSellInstructionDto, ip?: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
+
+    // Verify client holding ownership and quantity
+    const userAccounts = await this.prisma.account.findMany({
+      where: { userId },
+      include: {
+        portfolio: {
+          include: {
+            holdings: {
+              include: { asset: true },
+            },
+          },
+        },
+      },
+    });
+
+    let totalOwnedUnits = 0;
+    for (const acc of userAccounts) {
+      if (acc.portfolio) {
+        for (const h of acc.portfolio.holdings) {
+          if (h.asset.symbol.toUpperCase() === dto.assetSymbol.toUpperCase()) {
+            totalOwnedUnits += Number(h.quantity);
+          }
+        }
+      }
+    }
+
+    if (totalOwnedUnits <= 0) {
+      throw new BadRequestException(
+        `You do not own any units of ${dto.assetSymbol.toUpperCase()} to sell.`,
+      );
+    }
+
+    if (totalOwnedUnits < Number(dto.quantity)) {
+      throw new BadRequestException(
+        `You only own ${totalOwnedUnits} unit(s) of ${dto.assetSymbol.toUpperCase()}, which is less than the requested ${dto.quantity} unit(s).`,
+      );
+    }
 
     const instruction = await this.prisma.sellInstruction.create({
       data: {

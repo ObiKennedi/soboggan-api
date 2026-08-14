@@ -32,7 +32,7 @@ export class TransactionsService {
     if (!account) throw new NotFoundException('Account not found');
     if (account.userId !== userId) throw new ForbiddenException();
 
-    return this.applyInternal(accountId, dto.type, dto.amount, dto.description);
+    return this.applyInternal(accountId, dto.type, dto.amount, dto.description, dto.metadata);
   }
 
   /**
@@ -46,6 +46,7 @@ export class TransactionsService {
     type: TransactionType,
     amount: number,
     description?: string,
+    metadata?: any,
   ) {
     const account = await this.prisma.account.findUnique({ where: { id: accountId } });
     if (!account) throw new NotFoundException('Account not found');
@@ -70,6 +71,7 @@ export class TransactionsService {
           amount,
           currency: account.currency,
           description,
+          metadata: metadata ?? undefined,
           status: TransactionStatus.COMPLETED,
           reference: `TXN-${uuid()}`,
         },

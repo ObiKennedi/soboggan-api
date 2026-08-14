@@ -1,12 +1,16 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { AssetType, BuyInstruction } from '@prisma/client';
+import { AssetType, BuyInstruction, SellInstruction } from '@prisma/client';
 import { randomUUID } from 'crypto';
 
 type BuyInstructionFull = BuyInstruction & {
   user: { id: string; firstName: string; lastName: string; email: string };
   listing?: { title: string; pricePerUnit: any } | null;
+};
+
+type SellInstructionFull = SellInstruction & {
+  user: { id: string; firstName: string; lastName: string; email: string };
 };
 
 @Injectable()
@@ -173,4 +177,137 @@ export class PortfolioExecutionService {
       },
     });
   }
+
+  /**
+   * Called when admin marks a SellInstruction as EXECUTED.
+   * Validates:
+   *   1. The client actually owns the asset and has >= requested quantity.
+   *   2. Increases client's account balance by the sale value (quantity * price).
+   *   3. Decrements or removes the holding from client's portfolio.
+   *   4. Records a COMPLETED SELL transaction.
+   *   5. Notifies client via Pusher + Push notifications.
+   */
+  async executePortfolioSale(instruction: SellInstructionFull): Promise<void> {
+    const { userId, assetSymbol, assetName, quantity, targetPrice } = instruction;
+    const qtyToSell = Number(quantity);
+
+    // ── 1. Find all accounts and check client holding ownership ─────────────
+    const userAccounts = await this.prisma.account.findMany({
+      where: { userId },
+      include: {
+        portfolio: {
+          include: {
+            holdings: {
+              include: { asset: true },
+            },
+          },
+        },
+      },
+    });
+
+    let targetHolding: any = null;
+    let targetAccount: any = null;
+
+    for (const acc of userAccounts) {
+      if (acc.portfolio) {
+        for (const h of acc.portfolio.holdings) {
+          if (h.asset.symbol.toUpperCase() === assetSymbol.toUpperCase()) {
+            targetHolding = h;
+            targetAccount = acc;
+            break;
+          }
+        }
+      }
+      if (targetHolding) break;
+    }
+
+    const currentOwnedQty = targetHolding ? Number(targetHolding.quantity) : 0;
+
+    if (!targetHolding || currentOwnedQty < qtyToSell) {
+      throw new BadRequestException(
+        `Cannot execute sale: Client owns ${currentOwnedQty} unit(s) of ${assetSymbol.toUpperCase()}, but sale instruction requested ${qtyToSell} unit(s).`,
+      );
+    }
+
+    // ── 2. Determine credit account & proceeds ──────────────────────────────
+    const creditAccount =
+      userAccounts.find((a) => a.type === 'SAVINGS' && a.status === 'ACTIVE') ||
+      userAccounts.find((a) => a.type === 'INVESTMENT' && a.status === 'ACTIVE') ||
+      targetAccount;
+
+    if (!creditAccount) {
+      throw new BadRequestException('No active client account found to credit sale proceeds.');
+    }
+
+    const saleUnitPrice = Number(targetPrice ?? targetHolding.asset.currentPrice ?? 0);
+    const totalProceeds = qtyToSell * saleUnitPrice;
+    const reference = `SELL-${randomUUID().slice(0, 8).toUpperCase()}`;
+
+    // ── 3. Execute DB writes atomically ─────────────────────────────────────
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Credit account balance
+      if (totalProceeds > 0) {
+        await tx.account.update({
+          where: { id: creditAccount.id },
+          data: { balance: { increment: totalProceeds } },
+        });
+      }
+
+      // 2. Decrement holding or delete if 0
+      const remainingQty = currentOwnedQty - qtyToSell;
+      if (remainingQty <= 0) {
+        await tx.holding.delete({
+          where: { id: targetHolding.id },
+        });
+      } else {
+        await tx.holding.update({
+          where: { id: targetHolding.id },
+          data: { quantity: remainingQty },
+        });
+      }
+
+      // 3. Create SELL Transaction record
+      await tx.transaction.create({
+        data: {
+          accountId: creditAccount.id,
+          type: 'SELL',
+          status: 'COMPLETED',
+          amount: totalProceeds,
+          currency: 'NGN',
+          reference,
+          description: `Sold ${qtyToSell} units of ${assetSymbol.toUpperCase()} @ ₦${saleUnitPrice.toLocaleString()} — Proceeds credited`,
+          metadata: {
+            assetSymbol: assetSymbol.toUpperCase(),
+            assetName,
+            quantity: qtyToSell,
+            unitPrice: saleUnitPrice,
+            totalProceeds,
+            instructionId: instruction.id,
+          },
+        },
+      });
+    });
+
+    this.logger.log(
+      `Portfolio sale complete: ${qtyToSell}x${assetSymbol} for user ${userId} [credited: ₦${totalProceeds.toLocaleString()}, ref: ${reference}]`,
+    );
+
+    // ── 4. Notify client ────────────────────────────────────────────────────
+    await this.notificationsService.create({
+      userId,
+      type: 'PORTFOLIO_UPDATE',
+      title: `💰 Sale Executed — ${assetSymbol.toUpperCase()}`,
+      body: `Your sale of ${qtyToSell} unit${qtyToSell !== 1 ? 's' : ''} of ${assetName || assetSymbol} has been executed for ₦${totalProceeds.toLocaleString()}. The proceeds have been credited to your ${creditAccount.type} account.`,
+      metadata: {
+        assetSymbol: assetSymbol.toUpperCase(),
+        assetName,
+        quantity: qtyToSell,
+        unitPrice: saleUnitPrice,
+        totalProceeds,
+        reference,
+        instructionId: instruction.id,
+      },
+    });
+  }
 }
+
