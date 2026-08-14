@@ -262,10 +262,24 @@ export class AuthService {
 
 
   async login(dto: LoginDto, ip?: string) {
-    const email = dto.email.trim().toLowerCase();
-    const user = await this.prisma.user.findUnique({
-      where: { email },
+    const rawEmail = dto.email.trim();
+    const lowerEmail = rawEmail.toLowerCase();
+
+    // Try exact lowercase first, then case-insensitive lookup
+    let user = await this.prisma.user.findUnique({
+      where: { email: lowerEmail },
     });
+
+    if (!user) {
+      user = await this.prisma.user.findFirst({
+        where: {
+          email: {
+            equals: rawEmail,
+            mode: 'insensitive',
+          },
+        },
+      });
+    }
 
     if (!user) {
       throw new UnauthorizedException('Invalid email or password');

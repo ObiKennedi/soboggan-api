@@ -5,28 +5,28 @@ const prisma = new PrismaClient();
 
 const ADMIN_ACCOUNTS = [
   {
-    email: 'JohnDoe.admin@soboggan.com',
+    email: 'johndoe.admin@soboggan.com',
     firstName: 'John',
     lastName: 'Doe',
     password: 'AdminPassword123!',
     phone: '+2348000000001',
   },
   {
-    email: 'SarahConnor.admin@soboggan.com',
+    email: 'sarahconnor.admin@soboggan.com',
     firstName: 'Sarah',
     lastName: 'Connor',
     password: 'AdminPassword123!',
     phone: '+2348000000002',
   },
   {
-    email: 'AlexSmith.admin@soboggan.com',
+    email: 'alexsmith.admin@soboggan.com',
     firstName: 'Alex',
     lastName: 'Smith',
     password: 'AdminPassword123!',
     phone: '+2348000000003',
   },
   {
-    email: 'Admin.admin@soboggan.com',
+    email: 'admin.admin@soboggan.com',
     firstName: 'Soboggan',
     lastName: 'Admin',
     password: 'AdminPassword123!',
@@ -37,16 +37,14 @@ const ADMIN_ACCOUNTS = [
 async function main() {
   console.log('🌱 Starting Admin Accounts Seeding…');
 
-  const defaultPasswordHash = await bcrypt.hash('AdminPassword123!', 10);
-
   for (const adminData of ADMIN_ACCOUNTS) {
-    const passwordHash = adminData.password
-      ? await bcrypt.hash(adminData.password, 10)
-      : defaultPasswordHash;
+    const passwordHash = await bcrypt.hash(adminData.password, 10);
+    const email = adminData.email.toLowerCase();
 
     const user = await prisma.user.upsert({
-      where: { email: adminData.email },
+      where: { email },
       update: {
+        passwordHash,
         role: Role.ADMIN,
         kycStatus: KycStatus.VERIFIED,
         emailVerified: true,
@@ -55,7 +53,7 @@ async function main() {
         lastName: adminData.lastName,
       },
       create: {
-        email: adminData.email,
+        email,
         firstName: adminData.firstName,
         lastName: adminData.lastName,
         passwordHash,
@@ -81,3 +79,4 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+
