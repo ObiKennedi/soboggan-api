@@ -1,10 +1,14 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { PusherService } from '../common/pusher/pusher.service';
 import { CreateSellInstructionDto } from './dto/create-sell-instruction.dto';
 import { CreateBuyInstructionDto } from './dto/create-buy-instruction.dto';
+import { NotificationType, Role } from '@prisma/client';
 
 // ─── Fallback NGX Stock Data ────────────────────────────────────────────────
+
 
 const FALLBACK_STOCKS = [
   { symbol: 'DANGCEM', name: 'Dangote Cement Plc', price: 650.00, change: 11.50, changePercent: '+1.80%', currency: 'NGN', volume: '1.2M' },
@@ -59,6 +63,8 @@ export class InvestmentsService {
   constructor(
     private prisma: PrismaService,
     private activityLogService: ActivityLogService,
+    private notificationsService: NotificationsService,
+    private pusherService: PusherService,
   ) {}
 
   // ─── Stocks ─────────────────────────────────────────────────────────────
@@ -169,6 +175,47 @@ export class InvestmentsService {
       },
     });
 
+    // Notify all active admins & advisors
+    const admins = await this.prisma.user.findMany({
+      where: {
+        role: { in: [Role.ADMIN, Role.ADVISOR] },
+        isActive: true,
+      },
+      select: { id: true, email: true },
+    });
+
+    const clientDisplayName = `${user.firstName} ${user.lastName}`.trim() || user.email;
+
+    for (const admin of admins) {
+      await this.notificationsService.create({
+        userId: admin.id,
+        type: NotificationType.PORTFOLIO_UPDATE,
+        title: `📥 New Buy Request: ${dto.stockSymbol.toUpperCase()}`,
+        body: `${clientDisplayName} submitted a request to buy ${dto.quantity} units of ${dto.stockName}.`,
+        metadata: {
+          type: 'BUY_INSTRUCTION',
+          instructionId: instruction.id,
+          assetCategory: dto.assetCategory,
+          stockSymbol: dto.stockSymbol.toUpperCase(),
+          quantity: dto.quantity,
+          unitPrice: dto.unitPrice,
+          totalCost,
+          clientEmail: user.email,
+          clientName: clientDisplayName,
+        },
+      });
+
+      await this.pusherService.triggerToUser(admin.id, 'buy_instruction_created', {
+        instruction,
+        client: {
+          id: user.id,
+          email: user.email,
+          name: clientDisplayName,
+          phone: user.phone,
+        },
+      });
+    }
+
     return instruction;
   }
 
@@ -210,6 +257,45 @@ export class InvestmentsService {
         targetPrice: dto.targetPrice,
       },
     });
+
+    // Notify all active admins & advisors
+    const admins = await this.prisma.user.findMany({
+      where: {
+        role: { in: [Role.ADMIN, Role.ADVISOR] },
+        isActive: true,
+      },
+      select: { id: true, email: true },
+    });
+
+    const clientDisplayName = `${user.firstName} ${user.lastName}`.trim() || user.email;
+
+    for (const admin of admins) {
+      await this.notificationsService.create({
+        userId: admin.id,
+        type: NotificationType.PORTFOLIO_UPDATE,
+        title: `🚨 New Sell Instruction: ${dto.assetSymbol.toUpperCase()}`,
+        body: `${clientDisplayName} submitted an instruction to sell ${dto.quantity} units of ${dto.assetName || dto.assetSymbol}.`,
+        metadata: {
+          type: 'SELL_INSTRUCTION',
+          instructionId: instruction.id,
+          assetSymbol: dto.assetSymbol.toUpperCase(),
+          quantity: dto.quantity,
+          targetPrice: dto.targetPrice ?? null,
+          clientEmail: user.email,
+          clientName: clientDisplayName,
+        },
+      });
+
+      await this.pusherService.triggerToUser(admin.id, 'sell_instruction_created', {
+        instruction,
+        client: {
+          id: user.id,
+          email: user.email,
+          name: clientDisplayName,
+          phone: user.phone,
+        },
+      });
+    }
 
     return instruction;
   }
