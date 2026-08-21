@@ -153,4 +153,72 @@ export class NotificationsService {
       data: { read: true },
     });
   }
+
+  /**
+   * Broadcasts a notification to all active clients (creates DB notifications and sends Expo Push notifications)
+   */
+  async broadcastToAllClients(input: {
+    title: string;
+    body: string;
+    type?: NotificationType;
+    metadata?: Prisma.InputJsonValue;
+  }) {
+    const type = input.type || NotificationType.MARKETING;
+    const users = await this.prisma.user.findMany({
+      where: { isActive: true },
+      select: { id: true },
+    });
+
+    if (users.length === 0) return;
+
+    // 1. Bulk create DB notifications
+    await this.prisma.notification.createMany({
+      data: users.map((u) => ({
+        userId: u.id,
+        type,
+        title: input.title,
+        body: input.body,
+        metadata: input.metadata || {},
+      })),
+    });
+
+    // 2. Query all devices with push tokens
+    const devices = await this.prisma.device.findMany({
+      where: { pushToken: { not: null } },
+      select: { pushToken: true },
+    });
+
+    const pushTokens = Array.from(
+      new Set(
+        devices
+          .map((d) => d.pushToken)
+          .filter((t): t is string => !!t && isExpoPushToken(t)),
+      ),
+    );
+
+    if (pushTokens.length > 0) {
+      const messages: ExpoPushMessage[] = pushTokens.map((token) => ({
+        to: token,
+        sound: 'default',
+        title: input.title,
+        body: input.body,
+        data: input.metadata || {},
+      }));
+
+      const chunks = this.chunkPushNotifications(messages);
+      for (const chunk of chunks) {
+        try {
+          await axios.post('https://exp.host/--/api/v2/push/send', chunk, {
+            headers: {
+              'Accept': 'application/json',
+              'Accept-Encoding': 'gzip, deflate',
+              'Content-Type': 'application/json',
+            },
+          });
+        } catch (error: any) {
+          this.logger.error('Error broadcasting Expo push chunk:', error?.response?.data || error?.message || error);
+        }
+      }
+    }
+  }
 }

@@ -20,6 +20,8 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { InvestmentsModule } from './investments/investments.module';
 import { AdminModule } from './admin/admin.module';
 import { RealEstateModule } from './real-estate/real-estate.module';
+import { CloudinaryModule } from './common/cloudinary/cloudinary.module';
+import { BlogModule } from './blog/blog.module';
 
 @Module({
   imports: [
@@ -29,6 +31,7 @@ import { RealEstateModule } from './real-estate/real-estate.module';
     // Global infra
     PrismaModule,
     PusherModule,
+    CloudinaryModule,
     ActivityLogModule,
 
     // Feature modules
@@ -39,6 +42,7 @@ import { RealEstateModule } from './real-estate/real-estate.module';
     InvestmentsModule,
     AdminModule,
     RealEstateModule,
+    BlogModule,
     TransactionsModule,
     PaymentsModule,
     LoansModule,

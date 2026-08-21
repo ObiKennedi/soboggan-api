@@ -408,3 +408,27 @@ model RealEstateListing {
   @@index([status])
   @@map("real_estate_listings")
 }
+
+model BlogPost {
+  id            String    @id @default(uuid())
+  title         String
+  slug          String    @unique
+  excerpt       String
+  content       String    @db.Text
+  coverImageUrl String?
+  cloudinaryId  String?
+  authorName    String    @default("Soboggan Research Team")
+  category      String    @default("Market Strategy")
+  tags          String[]  @default([])
+  isPublished   Boolean   @default(true)
+  readTime      Int       @default(3)
+  publishedAt   DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([slug])
+  @@index([isPublished])
+  @@index([category])
+  @@index([publishedAt])
+  @@map("blog_posts")
+}
