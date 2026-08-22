@@ -52,15 +52,53 @@ export class PortfolioExecutionService {
     });
 
     if (!account) {
-      this.logger.warn(`No active account found for user ${userId} — skipping portfolio execution`);
-      return;
+      // Auto-reject instruction if no account exists
+      await this.prisma.buyInstruction.update({
+        where: { id: instruction.id },
+        data: {
+          status: 'REJECTED',
+          adminNotes: 'Auto-rejected: Client has no active investment/savings account.',
+        },
+      });
+      await this.notificationsService.create({
+        userId,
+        type: 'PORTFOLIO_UPDATE',
+        title: `❌ Purchase Request Rejected — ${stockSymbol.toUpperCase()}`,
+        body: `Your request to buy ${qty} unit(s) of ${stockName} was automatically rejected because no active account was found.`,
+        metadata: { instructionId: instruction.id, totalCost: cost },
+      });
+      throw new BadRequestException('Client has no active account. Purchase request has been automatically REJECTED.');
     }
 
-    if (Number(account.balance) < cost) {
+    const availableBalance = Number(account.balance);
+    if (availableBalance < cost) {
+      const rejectNotes = `Auto-rejected due to insufficient balance. Required: ₦${cost.toLocaleString(undefined, { minimumFractionDigits: 2 })}, Available: ₦${availableBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
+      
+      // Auto-reject instruction in DB
+      await this.prisma.buyInstruction.update({
+        where: { id: instruction.id },
+        data: {
+          status: 'REJECTED',
+          adminNotes: rejectNotes,
+        },
+      });
+
+      // Notify client
+      await this.notificationsService.create({
+        userId,
+        type: 'PORTFOLIO_UPDATE',
+        title: `❌ Purchase Request Rejected — ${stockSymbol.toUpperCase()}`,
+        body: `Your request to buy ${qty} unit(s) of ${stockName} for ₦${cost.toLocaleString()} was automatically rejected due to insufficient account balance (Available: ₦${availableBalance.toLocaleString()}).`,
+        metadata: { instructionId: instruction.id, totalCost: cost, availableBalance },
+      });
+
       this.logger.warn(
-        `Account ${account.id} balance (${account.balance}) < cost (${cost}) — skipping deduction`,
+        `Auto-rejected buy instruction ${instruction.id} for user ${userId}: balance (${availableBalance}) < cost (${cost})`,
       );
-      // Still record but don't throw — admin may handle separately
+
+      throw new BadRequestException(
+        `Insufficient client balance (Available: ₦${availableBalance.toLocaleString()}, Required: ₦${cost.toLocaleString()}). The purchase request was automatically REJECTED.`,
+      );
     }
 
     const reference = `BUY-${randomUUID().slice(0, 8).toUpperCase()}`;

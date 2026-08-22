@@ -1,12 +1,21 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CloudinaryService } from '../common/cloudinary/cloudinary.service';
 import { CreateRealEstateListingDto } from './dto/create-listing.dto';
 import { UpdateRealEstateListingDto } from './dto/update-listing.dto';
 import { RealEstateListingStatus } from '@prisma/client';
 
 @Injectable()
 export class RealEstateService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private cloudinary: CloudinaryService,
+  ) {}
+
+  /** Upload property image to Cloudinary */
+  async uploadListingImage(imageDataUri: string) {
+    return this.cloudinary.uploadImage(imageDataUri, 'soboggan/real-estate');
+  }
 
   /** Public: all ACTIVE listings for the mobile app */
   async listActiveListings() {

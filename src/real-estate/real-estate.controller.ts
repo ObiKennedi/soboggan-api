@@ -44,6 +44,12 @@ export class RealEstateAdminController {
     return this.realEstateService.listAllListings(status);
   }
 
+  @Post('listings/upload')
+  @Roles('ADMIN')
+  uploadImage(@Body('imageDataUri') imageDataUri: string) {
+    return this.realEstateService.uploadListingImage(imageDataUri);
+  }
+
   @Post('listings')
   @Roles('ADMIN')
   createListing(@Body() dto: CreateRealEstateListingDto) {

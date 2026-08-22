@@ -199,10 +199,17 @@ export class AdminService {
 
     // Trigger portfolio execution on first EXECUTED transition
     if (dto.status === 'EXECUTED' && !wasAlreadyExecuted) {
-      // Fire-and-forget; errors are logged inside the service
-      this.portfolioExecutionService.executePortfolioPurchase(updated as any).catch((err) => {
-        console.error('Portfolio execution failed for instruction', id, err);
-      });
+      try {
+        await this.portfolioExecutionService.executePortfolioPurchase(updated as any);
+      } catch (err: any) {
+        // Fetch auto-rejected instruction to return the updated status
+        const rejectedResult = await this.prisma.buyInstruction.findUnique({
+          where: { id },
+          include: { user: true, listing: true },
+        });
+        if (rejectedResult) return rejectedResult;
+        throw err;
+      }
     }
 
     return updated;
